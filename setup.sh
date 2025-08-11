@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# BulleoApp MCP Setup Script
+# BulleoApp MCP Setup Script - Fixed for doublenumerique-yann
 
 set -e
 
 echo "🚀 Setting up BulleoApp MCP Configuration..."
+echo "📍 Using GCP Project: doublenumerique-yann"
 
 # Colors for output
 RED='\033[0;31m'
@@ -56,37 +57,36 @@ fi
 
 # Setup GCP credentials
 echo ""
-echo "${GREEN}🔐 Setting up GCP credentials...${NC}"
-echo "Please make sure you have:"
-echo "1. A GCP project created (bulleoapp-prod)"
-echo "2. Firebase project initialized"
-echo "3. Required APIs enabled (Vision, Speech, Healthcare, etc.)"
+echo "${GREEN}🔐 Setting up GCP credentials for doublenumerique-yann...${NC}"
 echo ""
-read -p "Press enter to continue with authentication..."
 
+# Set the project
+PROJECT_ID="doublenumerique-yann"
+FIREBASE_PROJECT_ID="doublenumerique-yann"
+
+echo "Setting default project to $PROJECT_ID..."
+gcloud config set project "$PROJECT_ID"
+
+# Authenticate
+echo "Authenticating with Google Cloud..."
 gcloud auth application-default login
-
-# Get project ID
-read -p "Enter your GCP Project ID [bulleoapp-prod]: " PROJECT_ID
-PROJECT_ID=${PROJECT_ID:-bulleoapp-prod}
-
-read -p "Enter your Firebase Project ID [bulleoapp-firebase]: " FIREBASE_PROJECT_ID
-FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-bulleoapp-firebase}
 
 # Create service account
 echo "🔑 Creating service account..."
-gcloud iam service-accounts create bulleoapp-mcp \
+SERVICE_ACCOUNT_NAME="bulleoapp-mcp"
+SERVICE_ACCOUNT="$SERVICE_ACCOUNT_NAME@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud iam service-accounts create $SERVICE_ACCOUNT_NAME \
     --display-name="BulleoApp MCP Service Account" \
     --project="$PROJECT_ID" 2>/dev/null || echo "Service account already exists"
 
 # Grant necessary roles
 echo "🎯 Granting IAM roles..."
-SERVICE_ACCOUNT="bulleoapp-mcp@${PROJECT_ID}.iam.gserviceaccount.com"
 
 ROLES=(
     "roles/datastore.user"
     "roles/storage.objectAdmin"
-    "roles/cloudvision.admin"
+    "roles/cloudvision.admin" 
     "roles/cloudspeech.admin"
     "roles/logging.logWriter"
     "roles/monitoring.metricWriter"
@@ -103,85 +103,137 @@ done
 # Download service account key
 KEY_PATH="$HOME/.config/gcloud/bulleoapp-credentials.json"
 mkdir -p "$(dirname "$KEY_PATH")"
-echo "📥 Downloading service account key..."
+echo "📥 Creating service account key..."
+
+# Remove old key if exists
+if [ -f "$KEY_PATH" ]; then
+    echo "  Removing old key..."
+    rm "$KEY_PATH"
+fi
+
 gcloud iam service-accounts keys create "$KEY_PATH" \
     --iam-account="$SERVICE_ACCOUNT" \
     --project="$PROJECT_ID"
 
-# Configure Claude Desktop
-CONFIG_DIR="$HOME/Library/Application Support/Claude"
-CONFIG_FILE="$CONFIG_DIR/claude_desktop_config.json"
+echo "${GREEN}✅ Service account key created at: $KEY_PATH${NC}"
 
-if [ -d "$CONFIG_DIR" ]; then
-    echo "📝 Configuring Claude Desktop..."
-    
-    # Backup existing config
-    if [ -f "$CONFIG_FILE" ]; then
-        cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
-        echo "  Backed up existing config"
-    fi
-    
-    # Create new config
-    cat > "$CONFIG_FILE" << EOF
-{
-  "mcpServers": {
-    "bulleoapp-gcp": {
-      "command": "node",
-      "args": [
-        "$MCP_DIR/google-cloud-mcp/dist/index.js"
-      ],
-      "env": {
-        "GOOGLE_APPLICATION_CREDENTIALS": "$KEY_PATH",
-        "GCP_PROJECT_ID": "$PROJECT_ID",
-        "FIREBASE_PROJECT_ID": "$FIREBASE_PROJECT_ID"
-      }
-    }
-  }
-}
-EOF
-    echo "${GREEN}✅ Claude Desktop configured!${NC}"
+# Detect OS and set config path
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    CONFIG_DIR="$HOME/Library/Application Support/Claude"
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    # Linux
+    CONFIG_DIR="$HOME/.config/Claude"
+elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+    # Windows
+    CONFIG_DIR="$APPDATA/Claude"
 else
-    echo "${YELLOW}⚠️  Claude Desktop not found. Please configure manually.${NC}"
-    echo "Add this to your claude_desktop_config.json:"
-    cat << EOF
-{
-  "mcpServers": {
-    "bulleoapp-gcp": {
-      "command": "node",
-      "args": [
-        "$MCP_DIR/google-cloud-mcp/dist/index.js"
-      ],
-      "env": {
-        "GOOGLE_APPLICATION_CREDENTIALS": "$KEY_PATH",
-        "GCP_PROJECT_ID": "$PROJECT_ID",
-        "FIREBASE_PROJECT_ID": "$FIREBASE_PROJECT_ID"
-      }
-    }
-  }
-}
-EOF
+    CONFIG_DIR="$HOME/.config/Claude"
 fi
 
-# Test the setup
+CONFIG_FILE="$CONFIG_DIR/claude_desktop_config.json"
+
+echo ""
+echo "📝 Configuring Claude Desktop..."
+echo "Config directory: $CONFIG_DIR"
+echo "Config file: $CONFIG_FILE"
+
+# Create config directory if it doesn't exist
+mkdir -p "$CONFIG_DIR"
+
+# Backup existing config if it exists
+if [ -f "$CONFIG_FILE" ]; then
+    BACKUP_FILE="${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$CONFIG_FILE" "$BACKUP_FILE"
+    echo "  ✅ Backed up existing config to: $BACKUP_FILE"
+fi
+
+# Create the configuration
+cat > "$CONFIG_FILE" << EOF
+{
+  "mcpServers": {
+    "bulleoapp-gcp": {
+      "command": "node",
+      "args": [
+        "$MCP_DIR/google-cloud-mcp/dist/index.js"
+      ],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "$KEY_PATH",
+        "GCP_PROJECT_ID": "$PROJECT_ID",
+        "FIREBASE_PROJECT_ID": "$FIREBASE_PROJECT_ID"
+      }
+    }
+  }
+}
+EOF
+
+echo "${GREEN}✅ Claude Desktop configuration created!${NC}"
+
+# Verify the configuration
+echo ""
+echo "🔍 Verifying configuration..."
+echo ""
+
+if [ -f "$CONFIG_FILE" ]; then
+    echo "✅ Config file exists at: $CONFIG_FILE"
+    echo ""
+    echo "📄 Configuration content:"
+    echo "----------------------------------------"
+    cat "$CONFIG_FILE"
+    echo "----------------------------------------"
+else
+    echo "${RED}❌ Config file not found!${NC}"
+fi
+
+# Test the MCP server
 echo ""
 echo "🧪 Testing MCP setup..."
 cd "$MCP_DIR/google-cloud-mcp"
 
-# Create a simple test
-echo "Testing connection to GCP..."
-node -e "console.log('✅ Node.js is working'); process.exit(0);" && echo "${GREEN}✅ Basic test passed${NC}"
+# Check if the built file exists
+if [ -f "dist/index.js" ]; then
+    echo "✅ MCP server built successfully"
+    
+    # Try to run a basic test
+    echo "Testing Node.js execution..."
+    node -e "console.log('✅ Node.js is working')" && echo "${GREEN}✅ Basic test passed${NC}"
+else
+    echo "${RED}❌ MCP server build not found. Trying to rebuild...${NC}"
+    npm run build
+fi
 
 echo ""
 echo "${GREEN}🎉 Setup complete!${NC}"
 echo ""
-echo "Next steps:"
-echo "1. Restart Claude Desktop"
-echo "2. You should see 'bulleoapp-gcp' in the MCP servers list"
-echo "3. Try asking Claude to interact with your GCP resources"
+echo "⚠️  ${YELLOW}IMPORTANT: Claude Desktop Configuration${NC}"
+echo "----------------------------------------"
 echo ""
-echo "Example commands:"
-echo "  - 'List my Cloud Storage buckets'"
-echo "  - 'Analyze this image using Vision API'"
-echo "  - 'Query Firestore collection pregnancy_tracking'"
+echo "1. ${YELLOW}Completely quit Claude Desktop${NC} (not just close the window)"
+echo "   - On macOS: Cmd+Q or Claude > Quit Claude from menu bar"
+echo "   - On Windows: Right-click system tray icon > Exit"
+echo "   - On Linux: Close all Claude windows"
 echo ""
-echo "For more help, visit: https://github.com/yannabadie/bulleoapp-mcp-config"
+echo "2. ${YELLOW}Restart Claude Desktop${NC}"
+echo ""
+echo "3. ${YELLOW}Check for MCP server:${NC}"
+echo "   - Look for the hammer icon (🔨) in the text input area"
+echo "   - Click it to see 'bulleoapp-gcp' in the list"
+echo ""
+echo "4. ${YELLOW}If MCP doesn't appear:${NC}"
+echo "   a) Make sure Claude is completely closed (check Activity Monitor/Task Manager)"
+echo "   b) Check the config file exists:"
+echo "      cat \"$CONFIG_FILE\""
+echo "   c) Try manually testing the MCP:"
+echo "      cd $MCP_DIR/google-cloud-mcp"
+echo "      npx @modelcontextprotocol/inspector node dist/index.js"
+echo ""
+echo "📊 Your GCP Project: ${GREEN}$PROJECT_ID${NC}"
+echo "📁 MCP Installation: ${GREEN}$MCP_DIR${NC}"
+echo "🔑 Credentials: ${GREEN}$KEY_PATH${NC}"
+echo ""
+echo "Example commands to try in Claude:"
+echo "  - 'List my Cloud Storage buckets in doublenumerique-yann'"
+echo "  - 'Show my Firestore collections'"
+echo "  - 'List my GCP services'"
+echo ""
+echo "For troubleshooting, visit: https://github.com/yannabadie/bulleoapp-mcp-config"
